@@ -1,0 +1,99 @@
+WITH new_vulns AS
+(
+    SELECT
+        time_bucket('1 day', scantime) AS date,
+        COUNT(vul_id) AS new,
+        vul_severity_l1
+    FROM devicesnapshot ds1
+    WHERE vaptsdevtrgspecs IS NOT NULL
+    AND scantime = (
+        SELECT MAX(scantime)
+        FROM devicesnapshot ds2
+        WHERE ds2.vaptsdevtrgspecs = ds1.vaptsdevtrgspecs
+        AND ds2.vul_id = ds1.vul_id
+    )
+    AND lastcheck IS NULL
+    AND deletetime IS NULL
+    AND vul_severity_l1 IN ('high', 'critical')
+    GROUP BY time_bucket('1 day', scantime), vul_severity_l1
+),
+repeated AS
+(
+    SELECT
+        time_bucket('1 day', to_timestamp(lastcheck)) AS date,
+        COUNT(vul_id) AS repeated,
+        vul_severity_l1
+    FROM devicesnapshot ds1
+    WHERE vaptsdevtrgspecs IS NOT NULL
+    AND scantime = (
+        SELECT MAX(scantime)
+        FROM devicesnapshot ds2
+        WHERE ds2.vaptsdevtrgspecs = ds1.vaptsdevtrgspecs
+        AND ds2.vul_id = ds1.vul_id
+    )
+    AND lastcheck = (
+        SELECT MAX(lastcheck)
+        FROM devicesnapshot ds2
+        WHERE ds2.vaptsdevtrgspecs = ds1.vaptsdevtrgspecs
+        AND ds2.vul_id = ds1.vul_id
+    )
+    AND deletetime IS NULL
+    AND vul_severity_l1 IN ('high', 'critical')
+    GROUP BY time_bucket('1 day', to_timestamp(lastcheck)), vul_severity_l1
+),
+resolved AS
+(
+    SELECT
+        time_bucket('1 day', to_timestamp(deletetime)) AS date,
+        COUNT(vul_id) AS resolved,
+        vul_severity_l1
+    FROM devicesnapshot ds1
+    WHERE vaptsdevtrgspecs IS NOT NULL
+    AND scantime = (
+        SELECT MAX(scantime)
+        FROM devicesnapshot ds2
+        WHERE ds2.vaptsdevtrgspecs = ds1.vaptsdevtrgspecs
+        AND ds2.vul_id = ds1.vul_id
+    )
+    AND lastcheck = (
+        SELECT MAX(lastcheck)
+        FROM devicesnapshot ds2
+        WHERE ds2.vaptsdevtrgspecs = ds1.vaptsdevtrgspecs
+        AND ds2.vul_id = ds1.vul_id
+    )
+    AND deletetime = (
+        SELECT MAX(deletetime)
+        FROM devicesnapshot ds2
+        WHERE ds2.vaptsdevtrgspecs = ds1.vaptsdevtrgspecs
+        AND ds2.vul_id = ds1.vul_id
+    )
+    AND vul_severity_l1 IN ('high', 'critical')
+    GROUP BY time_bucket('1 day', to_timestamp(deletetime)), vul_severity_l1
+)
+SELECT
+    COALESCE(n.date, r.date, d.date) AS date,
+    COALESCE(n.vul_severity_l1, r.vul_severity_l1, d.vul_severity_l1) AS severity,
+    COALESCE(new, 0) AS new,
+    COALESCE(repeated, 0) AS repeated,
+    COALESCE(resolved, 0) AS resolved,
+    (COALESCE(new, 0) + COALESCE(repeated, 0) + COALESCE(resolved, 0)) AS total
+FROM new_vulns n
+FULL OUTER JOIN repeated r ON n.date = r.date AND n.vul_severity_l1 = r.vul_severity_l1
+FULL OUTER JOIN resolved d ON COALESCE(n.date, r.date) = d.date AND COALESCE(n.vul_severity_l1, r.vul_severity_l1) = d.vul_severity_l1
+WHERE COALESCE(n.date, r.date, d.date) IS NOT NULL
+ORDER BY severity DESC, total DESC
+LIMIT 10;
+
+
+
+
+
+--------------------layer 3 ---------------
+
+--- time_bucket('1 day', scantime) AS date,
+
+SELECT vul_id, time_bucket('1 day', scantime) AS scantime, vaptsdevtrgspecs, COUNT(CASE WHEN vul_severity_l1 IN ('critical', 'high') THEN 1 END) AS high,
+COUNT(CASE WHEN vul_severity_l1 = 'medium' THEN 1 END) AS medium, COUNT(CASE WHEN vul_severity_l1 = 'low' THEN 1 END) AS low,
+(COUNT(CASE WHEN vul_severity_l1 IN ('critical', 'high') THEN 1 END) + COUNT(CASE WHEN vul_severity_l1 = 'medium' THEN 1 END) +
+COUNT(CASE WHEN vul_severity_l1 = 'low' THEN 1 END)) AS max_count FROM devicesnapshot WHERE vul_id =2 
+GROUP BY scantime, vaptsdevtrgspecs, vul_id ORDER BY max_count DESC LIMIT 10
